@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
 import DOMPurify from 'dompurify';
+import axios from 'axios';
+import { Link } from '@mui/material';
+import HistoryIcon from '@mui/icons-material/History';
+import PointHistoryModal from './PointHistoryModal';
 import '../styles/PreviewMeeting.css';
 
 const PreviewMeeting = ({ meetingData, onClose }) => {
   const [expandedItems, setExpandedItems] = useState({});
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedPointHistory, setSelectedPointHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedPointName, setSelectedPointName] = useState("");
 
   if (!meetingData) return null;
 
@@ -35,6 +43,36 @@ const PreviewMeeting = ({ meetingData, onClose }) => {
     }
   };
 
+  const handleViewPointHistory = async (pointId, pointName) => {
+    setHistoryLoading(true);
+    setHistoryModalOpen(true);
+    setSelectedPointName(pointName);
+
+    try {
+      const token = localStorage.getItem("token");
+      const response = await axios.get(
+        `http://localhost:3000/api/meetings/forwarded-point-history/${pointId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      console.log("Point History:", response.data);
+      setSelectedPointHistory(response.data.history || []);
+    } catch (error) {
+      console.error("Error fetching point history:", error);
+      setSelectedPointHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleCloseHistoryModal = () => {
+    setHistoryModalOpen(false);
+    setSelectedPointHistory([]);
+    setSelectedPointName("");
+  };
+
   const renderTopicItem = (item) => {
     const isExpanded = expandedItems[item.id];
 
@@ -59,7 +97,24 @@ const PreviewMeeting = ({ meetingData, onClose }) => {
         </div>
 
         {item.forwarded && (
-          <div className="cm-forwarded-message">Forwarded from previous meeting</div>
+          <div className="cm-forwarded-message" style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'space-between' }}>
+            <span>Forwarded from previous meeting</span>
+            <Link
+              component="button"
+              onClick={() => handleViewPointHistory(item.id, item.title)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                fontSize: '13px',
+                textDecoration: 'none',
+                '&:hover': { textDecoration: 'underline' }
+              }}
+            >
+              <HistoryIcon sx={{ fontSize: 16 }} />
+              View History
+            </Link>
+          </div>
         )}
 
         {isExpanded && (
@@ -216,6 +271,15 @@ const PreviewMeeting = ({ meetingData, onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* Point History Modal */}
+      <PointHistoryModal
+        open={historyModalOpen}
+        onClose={handleCloseHistoryModal}
+        pointName={selectedPointName}
+        history={selectedPointHistory}
+        loading={historyLoading}
+      />
     </div>
   );
 };

@@ -2255,6 +2255,195 @@ const getMeetingStatus = async (req, res) => {
 };
 
 
+const getForwardedPointHistory = async (req, res) => {
+    const { pointId } = req.params;
+    const accessUserId = req.user.userId;
+
+    if (!pointId) {
+        return res.status(400).json({
+            success: false,
+            message: 'pointId is required'
+        });
+    }
+
+    try {
+        // Get the current point details
+        const [currentPoint] = await db.query(
+            `SELECT mp.*, m.meeting_name, m.start_time, m.end_time, m.created_by, m.meeting_status,
+                    u.name as responsible_user_name,
+                    creator.name as meeting_creator_name
+             FROM meeting_points mp
+             JOIN meeting m ON mp.meeting_id = m.id
+             LEFT JOIN users u ON mp.point_responsibility = u.id
+             LEFT JOIN users creator ON m.created_by = creator.id
+             WHERE mp.id = ?`,
+            [pointId]
+        );
+
+        if (currentPoint.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Point not found'
+            });
+        }
+
+        const point = currentPoint[0];
+
+        console.log('Point History Access Check:', {
+            pointId,
+            pointName: point.point_name,
+            meetingId: point.meeting_id,
+            meetingStatus: point.meeting_status,
+            createdBy: point.created_by,
+            accessUserId,
+            responsibleUser: point.point_responsibility
+        });
+
+        // Robust access checks - allow if user is ANY of:
+        // 1) Meeting creator (admin/scheduler)
+        // 2) Meeting member
+        // 3) Responsible (assigned) user for this point
+        // 4) Forwarding owner (either by point_id or by matching point_name)
+
+        const meetingCreatorId = point.created_by;
+        const isCreator = meetingCreatorId === accessUserId;
+
+        // Check if user is a meeting member
+        const [memberCheck] = await db.query(
+            `SELECT 1 FROM meeting_members WHERE meeting_id = ? AND user_id = ? LIMIT 1`,
+            [point.meeting_id, accessUserId]
+        );
+        const isMember = memberCheck.length > 0;
+
+        // Check if user is the responsible user for this point
+        const isResponsibleUser = point.point_responsibility && point.point_responsibility === accessUserId;
+
+        // Check if user is forwarding owner by exact point_id reference
+        const [forwardOwnerByPoint] = await db.query(
+            `SELECT 1 FROM meeting_point_future WHERE point_id = ? AND user_id = ? LIMIT 1`,
+            [pointId, accessUserId]
+        );
+        const isForwardOwnerByPoint = forwardOwnerByPoint.length > 0;
+
+        // Also check forwarding owner by point name (covers cases where forwarded points were inserted into new meetings)
+        const [forwardOwnerByName] = await db.query(
+            `SELECT 1
+             FROM meeting_point_future mpf
+             JOIN meeting_points mp ON mpf.point_id = mp.id
+             WHERE mp.point_name = ? AND mpf.user_id = ? LIMIT 1`,
+            [point.point_name, accessUserId]
+        );
+        const isForwardOwnerByName = forwardOwnerByName.length > 0;
+
+        console.log('Access Control Results:', {
+            isCreator,
+            isMember,
+            isResponsibleUser,
+            isForwardOwnerByPoint,
+            isForwardOwnerByName,
+            accessGranted: isCreator || isMember || isResponsibleUser || isForwardOwnerByPoint || isForwardOwnerByName
+        });
+
+        // Deny access if user is NONE of the above
+        if (!isCreator && !isMember && !isResponsibleUser && !isForwardOwnerByPoint && !isForwardOwnerByName) {
+            console.log('Access DENIED for user:', accessUserId);
+            return res.status(403).json({
+                success: false,
+                message: 'You do not have access to view this point'
+            });
+        }
+
+        console.log('Access GRANTED for user:', accessUserId);
+
+        // Build the history by tracing back through meeting_point_future
+        const history = [];
+        let currentPointId = pointId;
+        const visitedPoints = new Set();
+        
+        console.log('Starting history trace for point:', point.point_name);
+
+        // Trace back the history
+        while (currentPointId && !visitedPoints.has(currentPointId)) {
+            visitedPoints.add(currentPointId);
+
+            const [pointDetails] = await db.query(
+                `SELECT mp.*, m.meeting_name, m.start_time, m.end_time,
+                        u.name as responsible_user_name,
+                        creator.name as meeting_creator_name,
+                        mpf.forward_type, mpf.forward_decision,
+                        t.id as template_id, t.name as template_name
+                 FROM meeting_points mp
+                 JOIN meeting m ON mp.meeting_id = m.id
+                 LEFT JOIN users u ON mp.point_responsibility = u.id
+                 LEFT JOIN users creator ON m.created_by = creator.id
+                 LEFT JOIN meeting_point_future mpf ON mp.id = mpf.point_id
+                 LEFT JOIN templates t ON m.template_id = t.id
+                 WHERE mp.id = ?`,
+                [currentPointId]
+            );
+
+            if (pointDetails.length === 0) break;
+
+            const detail = pointDetails[0];
+            
+            console.log(`Found history entry: Meeting "${detail.meeting_name}" (${new Date(detail.start_time).toLocaleDateString()}) - Forward: ${detail.forward_type || 'NIL'}`);
+
+            history.push({
+                point_id: detail.id,
+                point_name: detail.point_name,
+                meeting_name: detail.meeting_name,
+                meeting_date: detail.start_time,
+                meeting_end_time: detail.end_time,
+                meeting_creator: detail.meeting_creator_name,
+                responsible_user: detail.responsible_user_name,
+                todo: detail.todo,
+                remarks: detail.remarks,
+                admin_remarks: detail.remarks_by_admin,
+                point_status: detail.point_status,
+                approved_by_admin: detail.approved_by_admin,
+                forward_type: detail.forward_type,
+                forward_decision: detail.forward_decision,
+                deadline: detail.point_deadline,
+                template_id: detail.template_id,
+                template_name: detail.template_name
+            });
+
+            // Try to find the previous occurrence of this point
+            const [previousPoint] = await db.query(
+                `SELECT mp2.id, mp2.point_name, mp2.meeting_id
+                 FROM meeting_points mp2
+                 JOIN meeting m2 ON mp2.meeting_id = m2.id
+                 WHERE mp2.point_name = ? 
+                   AND mp2.meeting_id != ?
+                   AND m2.start_time < (SELECT start_time FROM meeting WHERE id = ?)
+                 ORDER BY m2.start_time DESC
+                 LIMIT 1`,
+                [detail.point_name, detail.meeting_id, detail.meeting_id]
+            );
+
+            if (previousPoint.length > 0) {
+                currentPointId = previousPoint[0].id;
+            } else {
+                break;
+            }
+        }
+        
+        console.log(`History trace complete. Found ${history.length} entries. Reversing to show oldest → newest.`);
+
+        res.status(200).json({
+            success: true,
+            history: history.reverse() // Return oldest to newest
+        });
+
+    } catch (error) {
+        console.error('Error fetching forwarded point history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
+    }
+};
+
 module.exports = {
     createMeeting,
     assignResponsibility,
@@ -2278,6 +2467,7 @@ module.exports = {
     verifyToken,
     getPoints,
     respondToMeetingInvite,
+    getForwardedPointHistory,
     getUserMeetingResponse,
     getMeetingStatus,
     updatePoint,

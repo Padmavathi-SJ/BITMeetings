@@ -12,6 +12,7 @@ import {
   TextField,
   IconButton,
   Tooltip,
+  Link,
 } from "@mui/material";
 import Autocomplete from "@mui/material/Autocomplete";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -21,6 +22,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import AttendanceIcon from "@mui/icons-material/HowToReg";
 import AgendaIcon from "@mui/icons-material/Groups";
+import HistoryIcon from "@mui/icons-material/History";
 import ForwardingForm from "./MeetingPage2";
 import image from "../assets/bannariammanheader.png";
 import { useNavigate } from "react-router-dom";
@@ -29,6 +31,7 @@ import axios, { all } from "axios";
 import Reason from "../components/ViewReason";
 import VotingButtons from "../components/VotingButtons";
 import VotingDiagnostic from "../components/VotingDiagnostic";
+import PointHistoryModal from "../components/PointHistoryModal";
 import { format } from "date-fns";
 import DatePick from "../components/date";
 import React from "react";
@@ -84,6 +87,12 @@ export default function StartMeet({ handleBack }) {
   const [openDateIndex, setOpenDateIndex] = useState(null);
   const [selectedDate, setSelectedDate] = useState({});
   const [selectedDateSub, setSelectedDateSub] = useState({});
+
+  // Point history modal state
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedPointHistory, setSelectedPointHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedPointName, setSelectedPointName] = useState("");
 
   const [points, setPoints] = useState(
     meetingData.points.map((point) => ({
@@ -493,6 +502,41 @@ export default function StartMeet({ handleBack }) {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  // Point history modal handlers
+  const handleViewPointHistory = async (pointId, pointName) => {
+    setHistoryModalOpen(true);
+    setHistoryLoading(true);
+    setSelectedPointName(pointName);
+    setSelectedPointHistory([]);
+
+    const token = localStorage.getItem('token');
+    
+    try {
+      const response = await axios.get(
+        `http://localhost:5000/api/meetings/forwarded-point-history/${pointId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          }
+        }
+      );
+      
+      console.log("Point History:", response.data);
+      setSelectedPointHistory(response.data.history || []);
+    } catch (err) {
+      console.error("Error fetching point history:", err);
+      alert('Failed to fetch point history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleCloseHistoryModal = () => {
+    setHistoryModalOpen(false);
+    setSelectedPointHistory([]);
+    setSelectedPointName("");
   };
 
   // Handlers
@@ -1393,26 +1437,45 @@ export default function StartMeet({ handleBack }) {
                               maxWidth: "300px",
                             }}
                           >
-                            <TextField
-                              variant="standard"
-                              placeholder="Enter discussion topic"
-                              multiline
-                              fullWidth
-                              minRows={1}
-                              maxRows={4}
-                              value={point.point_name}
-                              InputProps={{
-                                disableUnderline: true,
-                                sx: { fontSize: "14px", fontWeight: "bold" },
-                              }}
-                              onChange={(e) =>
-                                handleChange(
-                                  index,
-                                  "point_name",
-                                  e.target.value
-                                )
-                              }
-                            />
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                              <TextField
+                                variant="standard"
+                                placeholder="Enter discussion topic"
+                                multiline
+                                fullWidth
+                                minRows={1}
+                                maxRows={4}
+                                value={point.point_name}
+                                InputProps={{
+                                  disableUnderline: true,
+                                  sx: { fontSize: "14px", fontWeight: "bold" },
+                                }}
+                                onChange={(e) =>
+                                  handleChange(
+                                    index,
+                                    "point_name",
+                                    e.target.value
+                                  )
+                                }
+                              />
+                              {point.point_name && point.forward_info && point.forward_info.type !== 'NIL' && (
+                                <Link
+                                  component="button"
+                                  variant="caption"
+                                  onClick={() => handleViewPointHistory(point.point_id || point.id, point.point_name)}
+                                  sx={{
+                                    textAlign: 'left',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 0.5,
+                                    fontSize: '11px'
+                                  }}
+                                >
+                                  <HistoryIcon sx={{ fontSize: 14 }} />
+                                  View History
+                                </Link>
+                              )}
+                            </Box>
                           </TableCell>
                           <TableCell sx={cellStyle}>
                             <TextField
@@ -2096,27 +2159,46 @@ export default function StartMeet({ handleBack }) {
                       <TableCell
                         sx={{ ...mergedCellStyle, fontWeight: "normal" }}
                       >
-                        <TextField
-                          variant="standard"
-                          placeholder="Points forward"
-                          multiline
-                          fullWidth
-                          value={point.point_name}
-                          minRows={1}
-                          maxRows={4}
-                          disabled={isRowDisabled}
-                          InputProps={{
-                            disableUnderline: true,
-                            sx: {
-                              fontSize: "14px",
-                              fontWeight: "bold",
-                              ...disabledStyle,
-                            },
-                          }}
-                          onChange={(e) =>
-                            handleChange(index, "point_name", e.target.value)
-                          }
-                        />
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                          <TextField
+                            variant="standard"
+                            placeholder="Points forward"
+                            multiline
+                            fullWidth
+                            value={point.point_name}
+                            minRows={1}
+                            maxRows={4}
+                            disabled={isRowDisabled}
+                            InputProps={{
+                              disableUnderline: true,
+                              sx: {
+                                fontSize: "14px",
+                                fontWeight: "bold",
+                                ...disabledStyle,
+                              },
+                            }}
+                            onChange={(e) =>
+                              handleChange(index, "point_name", e.target.value)
+                            }
+                          />
+                          {point.point_name && point.forward_info && point.forward_info.type !== 'NIL' && (
+                            <Link
+                              component="button"
+                              variant="caption"
+                              onClick={() => handleViewPointHistory(point.point_id || point.id, point.point_name)}
+                              sx={{
+                                textAlign: 'left',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 0.5,
+                                fontSize: '11px'
+                              }}
+                            >
+                              <HistoryIcon sx={{ fontSize: 14 }} />
+                              View History
+                            </Link>
+                          )}
+                        </Box>
                       </TableCell>
                       <TableCell sx={mergedCellStyle}>
                         <TextField
@@ -2378,6 +2460,15 @@ export default function StartMeet({ handleBack }) {
             </Box>
           </Box>
         )}
+
+        {/* Point History Modal */}
+        <PointHistoryModal
+          open={historyModalOpen}
+          onClose={handleCloseHistoryModal}
+          pointName={selectedPointName}
+          history={selectedPointHistory}
+          loading={historyLoading}
+        />
       </Box>
     </Box>
   );

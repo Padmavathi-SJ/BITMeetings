@@ -13,7 +13,9 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import CheckBoxIcon from '@mui/icons-material/CheckBox';
 import MeetingRejection from "../components/MeetingRejection";
 import VotingButtons from "../components/VotingButtons";
+import PointHistoryModal from "../components/PointHistoryModal";
 import { FormatBold, FormatItalic, FormatUnderlined, FormatAlignLeft, FormatAlignCenter, FormatAlignRight, Link } from "@mui/icons-material";
+import HistoryIcon from '@mui/icons-material/History';
 import image from "../assets/bannariammanheader.png";
 import format from "date-fns/format";
 
@@ -117,6 +119,12 @@ export default function JoinMeet() {
     const [votingData, setVotingData] = useState({});
     const [currentUser, setCurrentUser] = useState(null);
     const [isAdmin, setIsAdmin] = useState(false);
+    
+    // Point history modal state
+    const [historyModalOpen, setHistoryModalOpen] = useState(false);
+    const [selectedPointHistory, setSelectedPointHistory] = useState([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const [selectedPointName, setSelectedPointName] = useState("");
 
     const onBack = () => {
         navigate('/dashboard')
@@ -492,6 +500,45 @@ export default function JoinMeet() {
         }
     }
 
+    // Point history modal handlers
+    const handleViewPointHistory = async (pointId, pointName) => {
+        setHistoryModalOpen(true);
+        setHistoryLoading(true);
+        setSelectedPointName(pointName);
+        setSelectedPointHistory([]);
+
+        const token = localStorage.getItem('token');
+        
+        try {
+            const response = await axios.get(
+                `http://localhost:5000/api/meetings/forwarded-point-history/${pointId}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    }
+                }
+            );
+            
+            console.log("Point History:", response.data);
+            setSelectedPointHistory(response.data.history || []);
+        } catch (err) {
+            console.error("Error fetching point history:", err);
+            if (err.response?.status === 403) {
+                alert('You do not have permission to view this point history');
+            } else {
+                alert('Failed to fetch point history');
+            }
+        } finally {
+            setHistoryLoading(false);
+        }
+    };
+
+    const handleCloseHistoryModal = () => {
+        setHistoryModalOpen(false);
+        setSelectedPointHistory([]);
+        setSelectedPointName("");
+    };
+
     console.log('Joinmeet Debug:', {
         pointData,
         meetingData,
@@ -502,12 +549,13 @@ export default function JoinMeet() {
     });
 
     return (
-        <Box sx={{
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            minHeight: "90vh"
-        }}>
+        <>
+            <Box sx={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                minHeight: "90vh"
+            }}>
             <Box sx={{
                 display: "flex",
                 flexDirection: "column",
@@ -956,7 +1004,29 @@ export default function JoinMeet() {
                                             return (
                                                 <TableRow key={point.pointId}>
                                                     <TableCell sx={{ ...cellStyle, textAlign: "center" }}>{index + 1}</TableCell>
-                                                    <TableCell sx={{ ...cellStyle, textAlign: "center" }}>{point.point_name}</TableCell>
+                                                    <TableCell sx={{ ...cellStyle, textAlign: "center" }}>
+                                                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                                                            <Typography sx={{ fontWeight: 'bold', fontSize: '14px' }}>
+                                                                {point.point_name}
+                                                            </Typography>
+                                                            {point.point_name && ForwardPointData?.forward_info && ForwardPointData.forward_info.type !== 'NIL' && (
+                                                                <Link
+                                                                    component="button"
+                                                                    variant="caption"
+                                                                    onClick={() => handleViewPointHistory(point.pointId, point.point_name)}
+                                                                    sx={{
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: 0.5,
+                                                                        fontSize: '11px'
+                                                                    }}
+                                                                >
+                                                                    <HistoryIcon sx={{ fontSize: 14 }} />
+                                                                    View History
+                                                                </Link>
+                                                            )}
+                                                        </Box>
+                                                    </TableCell>
                                                     <TableCell sx={{ ...cellStyle, textAlign: "center" }}>{ForwardPointData?.admin_remarks || '-'}</TableCell>
                                                     <TableCell sx={{ ...cellStyle, textAlign: "center" }}>
                                                         <Box
@@ -1127,6 +1197,16 @@ export default function JoinMeet() {
                 </Box>
             </Box>
         </Box>
+
+        {/* Point History Modal */}
+        <PointHistoryModal
+            open={historyModalOpen}
+            onClose={handleCloseHistoryModal}
+            pointName={selectedPointName}
+            history={selectedPointHistory}
+            loading={historyLoading}
+        />
+        </>
     );
 }
 

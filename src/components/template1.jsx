@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Box, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, IconButton, Card, Chip, Select, MenuItem, CircularProgress } from "@mui/material";
+import { Box, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, IconButton, Card, Chip, Select, MenuItem, CircularProgress, Link } from "@mui/material";
 import Autocomplete from '@mui/material/Autocomplete';
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DvrOutlinedIcon from "@mui/icons-material/DvrOutlined";
@@ -19,6 +19,7 @@ import DatePick from "../components/date";
 import DateTimePicker from "../components/datetime";
 import RepeatOverlay from "../components/RepeatOverlay.jsx";
 import crt from "../assets/Featured icon.png";
+import PointHistoryModal from "../components/PointHistoryModal.jsx";
 import { set } from "date-fns";
 
 const Submit = () => {
@@ -43,6 +44,12 @@ export default function Cmeeting({ onBack }) {
   const [selectedMeeting, setSelectedMeeting] = useState("");
   const [meetingDescription, setMeetingDescription] = useState("");
   const [forwardedPoints, setForwardedPoints] = useState([]);
+  
+  // Point history modal state
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedPointHistory, setSelectedPointHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedPointName, setSelectedPointName] = useState("");
 
   useEffect(() => {
     const templateData = location.state?.selectedTemplate;
@@ -166,11 +173,25 @@ export default function Cmeeting({ onBack }) {
       const meetingId = response.data.meetingId;
 
       // Prepare an array of responsibility assignment promises
-
       console.log(discussionPoints)
 
-      const responsibilityPromises = discussionPoints
-        .filter(point => point.responsibility && point.responsibility.length > 0)
+      // Combine discussion points and approved forwarded points for responsibility assignment
+      const allPointsWithResponsibility = [
+        ...discussionPoints
+          .filter(point => point.responsibility && point.responsibility.length > 0)
+          .map((point, index) => ({ ...point, isForwarded: false, originalIndex: index })),
+        ...forwardedPoints
+          .filter(point => point.approved && point.responsibility && point.responsibility.length > 0)
+          .map((point) => ({ 
+            point: point.point_name, 
+            point_name: point.point_name,
+            responsibility: point.responsibility,
+            isForwarded: true,
+            point_id: point.point_id 
+          }))
+      ];
+
+      const responsibilityPromises = allPointsWithResponsibility
         .map(async (point, index) => {
           console.log(point, index)
           try {
@@ -185,13 +206,19 @@ export default function Cmeeting({ onBack }) {
               }
             );
 
-            // Find the point that matches our text (assuming the order is preserved)
-            // If order can't be guaranteed, we should match by point text
-            const pointData = pointsResponse.data.points[index] ||
-              pointsResponse.data.points.find(p => p.point_name === point.point);
+            let pointData;
+            
+            if (point.isForwarded) {
+              // For forwarded points, find by point_name
+              pointData = pointsResponse.data.points.find(p => p.point_name === point.point_name);
+            } else {
+              // For regular discussion points, use the index or match by text
+              pointData = pointsResponse.data.points[point.originalIndex] ||
+                pointsResponse.data.points.find(p => p.point_name === point.point);
+            }
 
             if (!pointData) {
-              console.error(`Could not find point matching: ${point.point}`);
+              console.error(`Could not find point matching: ${point.point || point.point_name}`);
               return;
             }
 
@@ -748,7 +775,7 @@ export default function Cmeeting({ onBack }) {
         // Mark the point as approved (make button green)
         setForwardedPoints(prev =>
           prev.map(point =>
-            point.point_id === pointId ? { ...point, approved: true } : point
+            point.point_id === pointId ? { ...point, approved: true, responsibility: null } : point
           )
         );
       } catch (err) {
@@ -760,6 +787,50 @@ export default function Cmeeting({ onBack }) {
       console.log("Removing point (Not Approved):", pointId);
       setForwardedPoints(prev => prev.filter(point => point.point_id !== pointId));
     }
+  };
+
+  const handleForwardedPointResponsibility = (pointId, newValue) => {
+    setForwardedPoints(prev =>
+      prev.map(point =>
+        point.point_id === pointId 
+          ? { ...point, responsibility: newValue ? [newValue] : [] } 
+          : point
+      )
+    );
+  };
+
+  const handleViewPointHistory = async (pointId, pointName) => {
+    setHistoryModalOpen(true);
+    setHistoryLoading(true);
+    setSelectedPointName(pointName);
+    setSelectedPointHistory([]);
+
+    const token = localStorage.getItem('token');
+    
+    try {
+      const response = await axios.get(
+        `http://localhost:5000/api/meetings/forwarded-point-history/${pointId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          }
+        }
+      );
+      
+      console.log("Point History:", response.data);
+      setSelectedPointHistory(response.data.history || []);
+    } catch (err) {
+      console.error("Error fetching point history:", err);
+      alert('Failed to fetch point history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleCloseHistoryModal = () => {
+    setHistoryModalOpen(false);
+    setSelectedPointHistory([]);
+    setSelectedPointName("");
   };
   
 
@@ -1366,30 +1437,109 @@ export default function Cmeeting({ onBack }) {
         )}
 
         {forwardedPoints.length > 0 && (
-          <TableContainer sx={{ border: "1px solid #ddd" }}>
+          <TableContainer sx={{ border: "1px solid #ddd", marginTop: '20px' }}>
             <Table sx={{ borderCollapse: "collapse" }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={headerCellStyle}>Point Name</TableCell>
                   <TableCell sx={headerCellStyle}>Forward Type</TableCell>
                   <TableCell sx={headerCellStyle}>Forward Decision</TableCell>
+                  <TableCell sx={headerCellStyle}>Assign Member</TableCell>
                   <TableCell sx={headerCellStyle}>Approve Point</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {forwardedPoints.map((point, index) => (
                   <TableRow key={point.point_id}>
-                    <TableCell sx={cellStyle}>{point.point_name}</TableCell>
+                    <TableCell sx={cellStyle}>
+                      <Link
+                        component="button"
+                        variant="body1"
+                        onClick={() => handleViewPointHistory(point.point_id, point.point_name)}
+                        sx={{
+                          textDecoration: 'none',
+                          color: '#1976d2',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          '&:hover': {
+                            textDecoration: 'underline',
+                            color: '#1565c0'
+                          }
+                        }}
+                      >
+                        {point.point_name}
+                      </Link>
+                    </TableCell>
                     <TableCell sx={cellStyle}>{point.forward_type}</TableCell>
                     <TableCell sx={cellStyle}>{point.forward_decision}</TableCell>
+                    <TableCell sx={cellStyle}>
+                      {point.approved ? (
+                        point.responsibility?.length > 0 ? (
+                          <Chip
+                            label={point.responsibility[0].name}
+                            sx={styles.memberSelection.chip}
+                            onDelete={() => handleForwardedPointResponsibility(point.point_id, null)}
+                            disabled={isPreview}
+                          />
+                        ) : (
+                          <Autocomplete
+                            value={point.responsibility?.[0] || null}
+                            onChange={(event, newValue) => handleForwardedPointResponsibility(point.point_id, newValue)}
+                            options={allMembers.filter(member => roles.some(role => role.members.some(m => m.id === member.id)))}
+                            getOptionLabel={(option) => option.name}
+                            isOptionEqualToValue={(option, value) => option.id === value.id}
+                            renderInput={(params) => (
+                              <TextField
+                                {...params}
+                                variant="outlined"
+                                placeholder="Select member"
+                                sx={styles.memberSelection.autocomplete}
+                                disabled={isPreview}
+                              />
+                            )}
+                            renderOption={(props, option, { selected }) => (
+                              <li
+                                {...props}
+                                style={{
+                                  ...props.style,
+                                  backgroundColor: selected ? '#e8f4ff' : 'transparent',
+                                }}
+                              >
+                                <Box sx={styles.memberSelection.option}>
+                                  <Typography sx={{ fontWeight: 500 }}>{option.name}</Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {option.role} • {option.department}
+                                  </Typography>
+                                </Box>
+                              </li>
+                            )}
+                            filterOptions={(options, { inputValue }) => {
+                              const searchTerm = inputValue.toLowerCase();
+                              return options.filter(option =>
+                                option.name.toLowerCase().includes(searchTerm) ||
+                                option.role.toLowerCase().includes(searchTerm) ||
+                                option.department.toLowerCase().includes(searchTerm)
+                              );
+                            }}
+                            sx={{ minWidth: 200 }}
+                            disabled={isPreview}
+                          />
+                        )
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          Approve point first
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell sx={cellStyle}>
                       <Box sx={{ display: "flex", gap: 1 }}>
                         <Button
                           variant="outlined"
                           color={point.approved ? "success" : "primary"}
                           onClick={() => handleApprove(point.point_id, true)}
+                          disabled={point.approved}
                         >
-                          Approve
+                          {point.approved ? "Approved" : "Approve"}
                         </Button>
                         <Button
                           variant="outlined"
@@ -1409,6 +1559,15 @@ export default function Cmeeting({ onBack }) {
 
 
       </Box>
+
+      {/* Point History Modal */}
+      <PointHistoryModal
+        open={historyModalOpen}
+        onClose={handleCloseHistoryModal}
+        history={selectedPointHistory}
+        loading={historyLoading}
+        pointName={selectedPointName}
+      />
 
     </Box>
   );
